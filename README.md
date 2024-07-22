@@ -203,4 +203,4 @@ The comparison script will generate:
 
 ## Contact
 
-For any questions or issues, please open an issue on this GitHub repository or contact [Your Name] at [your.email@example.com].
+For any questions or issues, please open an issue on this GitHub repository
