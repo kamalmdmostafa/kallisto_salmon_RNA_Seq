@@ -1,6 +1,6 @@
 # RNA-Seq Quantification Pipelines
 
-This repository contains two flexible RNA-Seq quantification pipelines using Kallisto and Salmon, as well as a comparison script to analyze the results from both tools.
+This repository contains two flexible RNA-Seq quantification pipelines using Kallisto and Salmon, as well as a comparison script to compare some basic ouptputs from both tools.
 
 ## Table of Contents
 
@@ -160,12 +160,16 @@ Example:
 
 ### Comparison Script
 
-After running both Kallisto and Salmon pipelines, you can use the comparison script to analyze the results:
+After running both the Kallisto and Salmon pipelines, you can use the comparison script to analyze the results:
 
 ```
-python compare_quantification_tools_kallisto_and_salmon.py
+python3 compare_quantification_tools_kallisto_and_salmon.py
 ```
+The alternative version of this script produces some extra comparisons. Depending on the number of quant files in your directories, the alternative file may take a long time to generate all the files.
 
+```
+python3 compare_quantification_tools_kallisto_and_salmon_alternative.py
+```
 The script will prompt you to enter:
 1. The path to the Kallisto results directory
 2. The path to the Salmon results directory
