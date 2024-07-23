@@ -55,6 +55,20 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to determine the number of threads to use
+get_thread_count() {
+    local total_threads=$(nproc)
+    local available_threads=$((total_threads - 2))  # Leave 2 threads for system processes
+    
+    if [ $available_threads -lt 1 ]; then
+        echo 1
+    elif [ $available_threads -gt "$THREADS" ]; then
+        echo "$THREADS"
+    else
+        echo $available_threads
+    fi
+}
+
 # Check for required commands
 for cmd in kallisto awk grep sed; do
     if ! command_exists "$cmd"; then
@@ -92,7 +106,10 @@ echo "Cleaned CDS file created: $CLEANED_CDS"
 
 # Step 2: Build Kallisto index
 echo "Building Kallisto index..."
-kallisto index -i "$INDEX_PREFIX" -k "$K_VALUE" "$CLEANED_CDS"
+INDEX_THREADS=$(get_thread_count)
+echo "Using $INDEX_THREADS threads for indexing"
+
+kallisto index -i "$INDEX_PREFIX" -k "$K_VALUE" --threads="$INDEX_THREADS" "$CLEANED_CDS"
 
 if [ -f "$INDEX_PREFIX" ]; then
     echo "Index created successfully: $INDEX_PREFIX"
@@ -201,18 +218,30 @@ extract_tpm() {
     echo "Extracting TPM values..."
     TPM_MATRIX="${KALLISTO_DIR}/kallisto_tpm_matrix.tsv"
     
+    # Find the first abundance.tsv file to get gene names
+    FIRST_ABUNDANCE=$(find "$QUANT_PREFIX" -name "abundance.tsv" | head -n 1)
+    if [ -z "$FIRST_ABUNDANCE" ]; then
+        echo "Error: No abundance.tsv files found in $QUANT_PREFIX"
+        return 1
+    fi
+    
     # Create header with gene names
-    awk 'NR>1 {print $1}' "${QUANT_PREFIX}/$(ls "${QUANT_PREFIX}" | head -n1)/abundance.tsv" > "$TPM_MATRIX"
+    awk 'NR>1 {print $1}' "$FIRST_ABUNDANCE" > "$TPM_MATRIX"
     
     # Extract and append TPM values for each sample
-    for SAMPLE_DIR in "${QUANT_PREFIX}"/*; do
+    find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | while read SAMPLE_DIR; do
         SAMPLE_NAME=$(basename "$SAMPLE_DIR")
-        awk -v OFS='\t' -v sample="$SAMPLE_NAME" 'NR>1 {print $5}' "${SAMPLE_DIR}/abundance.tsv" | \
-        paste "$TPM_MATRIX" - > "${TPM_MATRIX}.tmp" && mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
+        ABUNDANCE_FILE="$SAMPLE_DIR/abundance.tsv"
+        if [ -f "$ABUNDANCE_FILE" ]; then
+            awk -v OFS='\t' -v sample="$SAMPLE_NAME" 'NR>1 {print $5}' "$ABUNDANCE_FILE" | \
+            paste "$TPM_MATRIX" - > "${TPM_MATRIX}.tmp" && mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
+        else
+            echo "Warning: abundance.tsv not found for $SAMPLE_NAME"
+        fi
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(ls "${QUANT_PREFIX}" | tr '\n' '\t' | sed 's/\t$//')" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
+    (echo -e "gene_id\t$(find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | xargs -n 1 basename | tr '\n' '\t' | sed 's/\t$//')" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
     mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
     
     echo "TPM matrix created: $TPM_MATRIX"
@@ -223,27 +252,39 @@ extract_cpm() {
     echo "Extracting and calculating CPM values..."
     CPM_MATRIX="${KALLISTO_DIR}/kallisto_cpm_matrix.tsv"
     
+    # Find the first abundance.tsv file to get gene names
+    FIRST_ABUNDANCE=$(find "$QUANT_PREFIX" -name "abundance.tsv" | head -n 1)
+    if [ -z "$FIRST_ABUNDANCE" ]; then
+        echo "Error: No abundance.tsv files found in $QUANT_PREFIX"
+        return 1
+    }
+    
     # Create header with gene names
-    awk 'NR>1 {print $1}' "${QUANT_PREFIX}/$(ls "${QUANT_PREFIX}" | head -n1)/abundance.tsv" > "$CPM_MATRIX"
+    awk 'NR>1 {print $1}' "$FIRST_ABUNDANCE" > "$CPM_MATRIX"
     
     # Extract est_counts, calculate CPM, and append for each sample
-    for SAMPLE_DIR in "${QUANT_PREFIX}"/*; do
+    find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | while read SAMPLE_DIR; do
         SAMPLE_NAME=$(basename "$SAMPLE_DIR")
-        awk -v OFS='\t' -v sample="$SAMPLE_NAME" '
-        NR>1 {
-            count[NR] = $4
-            sum += $4
-        }
-        END {
-            for (i in count) {
-                print (count[i] / sum) * 1e6
+        ABUNDANCE_FILE="$SAMPLE_DIR/abundance.tsv"
+        if [ -f "$ABUNDANCE_FILE" ]; then
+            awk -v OFS='\t' -v sample="$SAMPLE_NAME" '
+            NR>1 {
+                count[NR] = $4
+                sum += $4
             }
-        }' "${SAMPLE_DIR}/abundance.tsv" | \
-        paste "$CPM_MATRIX" - > "${CPM_MATRIX}.tmp" && mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
+            END {
+                for (i in count) {
+                    print (count[i] / sum) * 1e6
+                }
+            }' "$ABUNDANCE_FILE" | \
+            paste "$CPM_MATRIX" - > "${CPM_MATRIX}.tmp" && mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
+        else
+            echo "Warning: abundance.tsv not found for $SAMPLE_NAME"
+        fi
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(ls "${QUANT_PREFIX}" | tr '\n' '\t' | sed 's/\t$//')" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
+    (echo -e "gene_id\t$(find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | xargs -n 1 basename | tr '\n' '\t' | sed 's/\t$//')" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
     mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
     
     echo "CPM matrix created: $CPM_MATRIX"
