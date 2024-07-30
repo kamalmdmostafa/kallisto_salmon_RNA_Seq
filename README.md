@@ -1,6 +1,6 @@
 # RNA-Seq Quantification Pipelines
 
-This repository contains two flexible RNA-Seq quantification pipelines using Kallisto and Salmon, as well as a comparison script to compare some basic ouptputs from both tools.
+This repository contains two flexible RNA-Seq quantification pipelines using Kallisto and Salmon, as well as comparison scripts to analyze outputs from both tools.
 
 ## Table of Contents
 
@@ -12,7 +12,7 @@ This repository contains two flexible RNA-Seq quantification pipelines using Kal
 4. [Usage](#usage)
    - [Kallisto Pipeline](#kallisto-pipeline)
    - [Salmon Pipeline](#salmon-pipeline)
-   - [Comparison Script](#comparison-script)
+   - [Comparison Scripts](#comparison-scripts)
 5. [Output](#output)
 6. [Troubleshooting](#troubleshooting)
 7. [Contact](#contact)
@@ -27,13 +27,13 @@ These pipelines automate the process of RNA-Seq quantification using either Kall
 4. Generating quality control reports
 5. Creating TPM (Transcripts Per Million) and CPM (Counts Per Million) matrices
 
-Additionally, a comparison script is provided to analyze and visualize the differences between Kallisto and Salmon results.
+Additionally, comparison scripts are provided to analyze and visualize the differences between Kallisto and Salmon results.
 
 ## Requirements
 
 - Bash (version 4.0 or later)
 - Conda or Mamba (for easy installation of Kallisto and Salmon)
-- Python 3.6+ (for the comparison script)
+- Python 3.6+ (for the comparison scripts)
 - Python libraries: pandas, matplotlib, seaborn, scipy, scikit-learn, numpy, biopython
 
 ## Installation
@@ -111,7 +111,7 @@ Choose either Conda or Mamba for the following steps. Mamba is generally faster.
 
 6. Make the pipeline scripts executable:
    ```
-   chmod +x flexible_kallisto_pipeline.sh flexible_salmon_pipeline_qc.sh
+   chmod +x complete-kallisto-pipeline.sh complete-salmon-pipeline.sh
    ```
 
 Now you have an environment with Kallisto, Salmon, and all the necessary Python libraries installed.
@@ -127,23 +127,24 @@ conda activate rnaseq_pipelines
 ### Kallisto Pipeline
 
 ```
-./flexible_kallisto_pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads>
+./complete-kallisto-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>]
 ```
 
 Options:
 - `-cds`: Path to the CDS FASTA file
 - `-k`: K-mer size for indexing
 - `-threads`: Number of threads to use
+- `-o`: (Optional) Output directory (default: './kallisto')
 
 Example:
 ```
-./flexible_kallisto_pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8
+./complete-kallisto-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -o /path/to/custom/output
 ```
 
 ### Salmon Pipeline
 
 ```
-./flexible_salmon_pipeline_qc.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb]
+./complete-salmon-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb] [-o <output directory>]
 ```
 
 Options:
@@ -152,34 +153,37 @@ Options:
 - `-threads`: Number of threads to use
 - `-genome`: (Optional) Path to the genome FASTA file for decoy-aware indexing
 - `-vb`: (Optional) Use Variational Bayesian Optimization in quantification
+- `-o`: (Optional) Output directory (default: './salmon')
 
 Example:
 ```
-./flexible_salmon_pipeline_qc.sh -cds path/to/cds.fasta -k 31 -threads 8 -genome path/to/genome.fasta -vb
+./complete-salmon-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -genome path/to/genome.fasta -vb -o /path/to/custom/output
 ```
 
-### Comparison Script
+### Comparison Scripts
 
-After running both the Kallisto and Salmon pipelines, you can use the comparison script to analyze the results:
+After running both the Kallisto and Salmon pipelines, you can use the comparison scripts to analyze the results:
 
+1. Basic comparison script:
 ```
 python3 compare_quantification_tools_kallisto_and_salmon.py
 ```
-The alternative version of this script produces some extra comparisons. Depending on the number of quant files in your directories, the alternative file may take a long time to generate all the files.
 
+2. Alternative comparison script with additional analyses:
 ```
 python3 compare_quantification_tools_kallisto_and_salmon_alternative.py
 ```
-The script will prompt you to enter:
+
+Both scripts will prompt you to enter:
 1. The path to the Kallisto results directory
 2. The path to the Salmon results directory
 3. The path to save the comparison results
 
-The script will then generate various comparisons and visualizations.
+The scripts will then generate various comparisons and visualizations. The alternative version produces some extra comparisons and may take longer to run, depending on the number of quantification files in your directories.
 
 ## Output
 
-Both pipelines will create a directory (`kallisto` or `salmon`) containing:
+Both pipelines will create a directory (specified by the `-o` option or defaulting to `kallisto` or `salmon`) containing:
 
 1. Cleaned CDS FASTA file
 2. Index files
@@ -188,7 +192,7 @@ Both pipelines will create a directory (`kallisto` or `salmon`) containing:
 5. TPM matrix (`kallisto_tpm_matrix.tsv` or `salmon_tpm_matrix.tsv`)
 6. CPM matrix (`kallisto_cpm_matrix.tsv` or `salmon_cpm_matrix.tsv`)
 
-The comparison script will generate:
+The comparison scripts will generate:
 
 1. An Excel file with detailed comparison statistics
 2. Various plots including scatter plots, density plots, and Bland-Altman plots
@@ -198,13 +202,13 @@ The comparison script will generate:
 
 ## Troubleshooting
 
-- Ensure you have activated the environment (`conda activate rnaseq_pipelines`) before running the pipelines or comparison script.
+- Ensure you have activated the environment (`conda activate rnaseq_pipelines`) before running the pipelines or comparison scripts.
 - If you encounter issues with Conda, try using Mamba for faster and more reliable package installation.
 - Check that input files are in the correct format (FASTA for CDS/genome, gzipped FASTQ for reads).
 - For any errors, check the log files in the output directory.
 - If you encounter permission issues, make sure the scripts are executable (`chmod +x script_name.sh`).
-- For issues with the comparison script, ensure all required Python libraries are installed and up-to-date in your environment.
+- For issues with the comparison scripts, ensure all required Python libraries are installed and up-to-date in your environment.
 
 ## Contact
 
-For any questions or issues, please open an issue on this GitHub repository
+For any questions or issues, please open an issue on this GitHub repository.
