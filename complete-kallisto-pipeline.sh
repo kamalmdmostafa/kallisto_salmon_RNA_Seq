@@ -4,11 +4,12 @@ set -e
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>]"
+    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>] [-p <read pair pattern>]"
     echo "  -cds      : Path to the CDS FASTA file"
     echo "  -k        : K-mer size for indexing"
     echo "  -threads  : Number of threads to use"
     echo "  -o        : Output directory (optional, default: './kallisto')"
+    echo "  -p        : Read pair pattern (optional, default: '*_R{1,2}*.fastq.gz')"
     exit 1
 }
 
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
         OUTPUT_DIR="$2"
         shift 2
         ;;
+        -p)
+        READ_PATTERN="$2"
+        shift 2
+        ;;
         *)
         echo "Unknown option: $1"
         usage
@@ -48,6 +53,11 @@ fi
 # Set default output directory if not specified
 if [ -z "$OUTPUT_DIR" ]; then
     OUTPUT_DIR="./kallisto"
+fi
+
+# Set default read pair pattern if not specified
+if [ -z "$READ_PATTERN" ]; then
+    READ_PATTERN="*_R{1,2}*.fastq.gz"
 fi
 
 # Set up directory structure
@@ -132,18 +142,31 @@ fi
 echo "Starting quantification..."
 mkdir -p "$QUANT_PREFIX"
 
-for R1_FILE in *_R1.fastq.gz
+# Find all unique sample prefixes
+SAMPLE_PREFIXES=$(ls $READ_PATTERN | sed -E 's/(.*)_R?[12].*/\1/' | sort -u)
+
+for SAMPLE_PREFIX in $SAMPLE_PREFIXES
 do
-    R2_FILE="${R1_FILE/_R1/_R2}"
-    SAMPLE_NAME=$(basename "$R1_FILE" _R1.fastq.gz)
+    # Find corresponding R1 and R2 files
+    R1_FILE=$(ls ${SAMPLE_PREFIX}*R1*.fastq.gz 2>/dev/null | head -n 1)
+    R2_FILE=$(ls ${SAMPLE_PREFIX}*R2*.fastq.gz 2>/dev/null | head -n 1)
+    
+    # If R1 and R2 files are not found, try alternative naming conventions
+    if [ -z "$R1_FILE" ] || [ -z "$R2_FILE" ]; then
+        R1_FILE=$(ls ${SAMPLE_PREFIX}*1.fastq.gz 2>/dev/null | head -n 1)
+        R2_FILE=$(ls ${SAMPLE_PREFIX}*2.fastq.gz 2>/dev/null | head -n 1)
+    fi
     
     # Check if both R1 and R2 files exist
-    if [ ! -f "$R1_FILE" ] || [ ! -f "$R2_FILE" ]; then
-        echo "Error: Missing paired-end file for $SAMPLE_NAME"
+    if [ -z "$R1_FILE" ] || [ -z "$R2_FILE" ]; then
+        echo "Error: Missing paired-end file for $SAMPLE_PREFIX"
         continue
     fi
     
+    SAMPLE_NAME=$(basename "$SAMPLE_PREFIX")
     echo "Processing sample: $SAMPLE_NAME"
+    echo "R1 file: $R1_FILE"
+    echo "R2 file: $R2_FILE"
     
     # Retry mechanism
     MAX_RETRIES=3
