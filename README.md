@@ -127,7 +127,7 @@ conda activate rnaseq_pipelines
 ### Kallisto Pipeline
 
 ```
-./complete-kallisto-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>]
+./complete-kallisto-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>] [-r <read file directory>] [-b <bootstrap samples>]
 ```
 
 Options:
@@ -135,16 +135,18 @@ Options:
 - `-k`: K-mer size for indexing
 - `-threads`: Number of threads to use
 - `-o`: (Optional) Output directory (default: './kallisto')
+- `-r`: (Optional) Directory containing read files (default: current directory)
+- `-b`: (Optional) Number of bootstrap samples (default: 100)
 
 Example:
 ```
-./complete-kallisto-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -o /path/to/custom/output
+./complete-kallisto-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -o /path/to/custom/output -r /path/to/read/files -b 200
 ```
 
 ### Salmon Pipeline
 
 ```
-./complete-salmon-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb] [-o <output directory>]
+./complete-salmon-pipeline.sh -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb] [-o <output directory>] [-r <read file directory>] [-b <bootstrap samples>]
 ```
 
 Options:
@@ -154,10 +156,12 @@ Options:
 - `-genome`: (Optional) Path to the genome FASTA file for decoy-aware indexing
 - `-vb`: (Optional) Use Variational Bayesian Optimization in quantification
 - `-o`: (Optional) Output directory (default: './salmon')
+- `-r`: (Optional) Directory containing read files (default: current directory)
+- `-b`: (Optional) Number of bootstrap samples (default: 200)
 
 Example:
 ```
-./complete-salmon-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -genome path/to/genome.fasta -vb -o /path/to/custom/output
+./complete-salmon-pipeline.sh -cds path/to/cds.fasta -k 31 -threads 8 -genome path/to/genome.fasta -vb -o /path/to/custom/output -r /path/to/read/files -b 300
 ```
 
 ### Comparison Scripts
@@ -175,8 +179,8 @@ python3 compare_quantification_tools_kallisto_and_salmon_alternative.py
 ```
 
 Both scripts will prompt you to enter:
-1. The path to the Kallisto results directory
-2. The path to the Salmon results directory
+1. The path to the first tool's results directory
+2. The path to the second tool's results directory
 3. The path to save the comparison results
 
 The scripts will then generate various comparisons and visualizations. The alternative version produces some extra comparisons and may take longer to run, depending on the number of quantification files in your directories.
@@ -195,10 +199,12 @@ Both pipelines will create a directory (specified by the `-o` option or defaulti
 The comparison scripts will generate:
 
 1. An Excel file with detailed comparison statistics
-2. Various plots including scatter plots, density plots, and Bland-Altman plots
+2. Various plots including scatter plots, density plots, Bland-Altman plots, and MA plots
 3. Correlation heatmaps
 4. Transcript detection comparison plots
 5. Mapping rate comparison plots
+6. Violin plots for TPM, Count, and EffLength distributions
+7. Cumulative TPM distribution plot
 
 ## Troubleshooting
 
@@ -208,6 +214,8 @@ The comparison scripts will generate:
 - For any errors, check the log files in the output directory.
 - If you encounter permission issues, make sure the scripts are executable (`chmod +x script_name.sh`).
 - For issues with the comparison scripts, ensure all required Python libraries are installed and up-to-date in your environment.
+- If the scripts can't find your read files, make sure you're using the `-r` option to specify the correct directory.
+- If you're having memory issues during the comparison, try running the script on a subset of your data first.
 
 ## Contact
 
