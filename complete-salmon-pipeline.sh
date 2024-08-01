@@ -4,19 +4,23 @@ set -e
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb] [-o <output directory>]"
+    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-genome <genome file>] [-vb] [-o <output directory>] [-r <read file directory>] [-b <bootstrap samples>]"
     echo "  -cds      : Path to the CDS FASTA file"
     echo "  -k        : K-mer size for indexing"
     echo "  -threads  : Number of threads to use"
     echo "  -genome   : (Optional) Path to the genome FASTA file for decoy-aware indexing"
     echo "  -vb       : (Optional) Use Variational Bayesian Optimization in quantification"
     echo "  -o        : (Optional) Output directory (default: './salmon')"
+    echo "  -r        : (Optional) Directory containing read files (default: current directory)"
+    echo "  -b        : (Optional) Number of bootstrap samples (default: 200)"
     exit 1
 }
 
 # Parse command-line arguments
 USE_VBOPT=false
 OUTPUT_DIR="./salmon"
+READ_DIR="."
+BOOTSTRAP_SAMPLES=200
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
@@ -44,6 +48,14 @@ while [[ $# -gt 0 ]]; do
         OUTPUT_DIR="$2"
         shift 2
         ;;
+        -r)
+        READ_DIR="$2"
+        shift 2
+        ;;
+        -b)
+        BOOTSTRAP_SAMPLES="$2"
+        shift 2
+        ;;
         *)
         echo "Unknown option: $1"
         usage
@@ -55,6 +67,12 @@ done
 if [ -z "$CDS_FILE" ] || [ -z "$K_VALUE" ] || [ -z "$THREADS" ]; then
     echo "Error: Missing required arguments"
     usage
+fi
+
+# Check if read directory exists
+if [ ! -d "$READ_DIR" ]; then
+    echo "Error: Read directory '$READ_DIR' does not exist"
+    exit 1
 fi
 
 # Set up directory structure
@@ -147,12 +165,38 @@ fi
 echo "Starting quantification..."
 mkdir -p "$QUANT_PREFIX"
 
-for R1_FILE in *_R1.fastq.gz
-do
-    R2_FILE="${R1_FILE/_R1/_R2}"
-    SAMPLE_NAME=$(basename "$R1_FILE" _R1.fastq.gz)
+# Function to find paired read files
+find_paired_reads() {
+    local r1_files=($(find "$READ_DIR" -maxdepth 1 -name "*R1*.fastq.gz" -o -name "*_1.fastq.gz"))
+    local r2_files=($(find "$READ_DIR" -maxdepth 1 -name "*R2*.fastq.gz" -o -name "*_2.fastq.gz"))
     
+    if [ ${#r1_files[@]} -eq 0 ] || [ ${#r2_files[@]} -eq 0 ]; then
+        echo "Error: No paired read files found in the directory: $READ_DIR" >&2
+        return 1
+    fi
+    
+    for r1_file in "${r1_files[@]}"; do
+        local r2_file="${r1_file/R1/R2}"
+        r2_file="${r2_file/_1/_2}"
+        
+        if [ -f "$r2_file" ]; then
+            echo "$r1_file $r2_file"
+        else
+            echo "Warning: No matching R2 file found for $r1_file" >&2
+        fi
+    done
+}
+
+# Process each pair of read files
+while read -r r1_file r2_file; do
+    if [ -z "$r1_file" ] || [ -z "$r2_file" ]; then
+        continue
+    fi
+    
+    SAMPLE_NAME=$(basename "$r1_file" | sed -E 's/_R1.*//;s/_1\.fastq\.gz//')
     echo "Processing sample: $SAMPLE_NAME"
+    echo "R1 file: $r1_file"
+    echo "R2 file: $r2_file"
     
     VBOPT_FLAG=""
     if [ "$USE_VBOPT" = true ]; then
@@ -161,19 +205,19 @@ do
     
     salmon quant -i "$INDEX_PREFIX" \
                  -l A \
-                 -1 "$R1_FILE" \
-                 -2 "$R2_FILE" \
+                 -1 "$r1_file" \
+                 -2 "$r2_file" \
                  -p "$THREADS" \
                  --validateMappings \
                  --gcBias \
                  --seqBias \
                  --rangeFactorizationBins 4 \
-                 --numBootstraps 200 \
+                 --numBootstraps "$BOOTSTRAP_SAMPLES" \
                  $VBOPT_FLAG \
                  -o "${QUANT_PREFIX}/${SAMPLE_NAME}"
 
     echo "Finished processing $SAMPLE_NAME"
-done
+done < <(find_paired_reads)
 
 echo "All samples have been processed. Results are in $QUANT_PREFIX"
 
@@ -213,18 +257,28 @@ extract_tpm() {
     echo "Extracting TPM values..."
     TPM_MATRIX="${SALMON_DIR}/salmon_tpm_matrix.tsv"
     
+    # Find all quant.sf files
+    QUANT_FILES=($(find "$QUANT_PREFIX" -name "quant.sf"))
+    
+    if [ ${#QUANT_FILES[@]} -eq 0 ]; then
+        echo "Error: No quant.sf files found in $QUANT_PREFIX"
+        return 1
+    fi
+    
     # Create header with gene names
-    awk 'NR>1 {print $1}' "${QUANT_PREFIX}/$(ls "${QUANT_PREFIX}" | head -n1)/quant.sf" > "$TPM_MATRIX"
+    awk 'NR>1 {print $1}' "${QUANT_FILES[0]}" > "$TPM_MATRIX"
     
     # Extract and append TPM values for each sample
-    for SAMPLE_DIR in "${QUANT_PREFIX}"/*; do
-        SAMPLE_NAME=$(basename "$SAMPLE_DIR")
-        awk -v OFS='\t' -v sample="$SAMPLE_NAME" 'NR>1 {print $4}' "${SAMPLE_DIR}/quant.sf" | \
+    for QUANT_FILE in "${QUANT_FILES[@]}"; do
+        SAMPLE_NAME=$(basename $(dirname "$QUANT_FILE"))
+        echo "Processing $SAMPLE_NAME"
+        awk -v OFS='\t' -v sample="$SAMPLE_NAME" 'NR>1 {print $4}' "$QUANT_FILE" | \
         paste "$TPM_MATRIX" - > "${TPM_MATRIX}.tmp" && mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(ls "${QUANT_PREFIX}" | tr '\n' '\t' | sed 's/\t$//')" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
+    SAMPLE_NAMES=$(for f in "${QUANT_FILES[@]}"; do basename $(dirname "$f"); done | tr '\n' '\t' | sed 's/\t$//')
+    (echo -e "gene_id\t$SAMPLE_NAMES" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
     mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
     
     echo "TPM matrix created: $TPM_MATRIX"
@@ -235,12 +289,21 @@ extract_cpm() {
     echo "Extracting and calculating CPM values..."
     CPM_MATRIX="${SALMON_DIR}/salmon_cpm_matrix.tsv"
     
+    # Find all quant.sf files
+    QUANT_FILES=($(find "$QUANT_PREFIX" -name "quant.sf"))
+    
+    if [ ${#QUANT_FILES[@]} -eq 0 ]; then
+        echo "Error: No quant.sf files found in $QUANT_PREFIX"
+        return 1
+    fi
+    
     # Create header with gene names
-    awk 'NR>1 {print $1}' "${QUANT_PREFIX}/$(ls "${QUANT_PREFIX}" | head -n1)/quant.sf" > "$CPM_MATRIX"
+    awk 'NR>1 {print $1}' "${QUANT_FILES[0]}" > "$CPM_MATRIX"
     
     # Extract NumReads, calculate CPM, and append for each sample
-    for SAMPLE_DIR in "${QUANT_PREFIX}"/*; do
-        SAMPLE_NAME=$(basename "$SAMPLE_DIR")
+    for QUANT_FILE in "${QUANT_FILES[@]}"; do
+        SAMPLE_NAME=$(basename $(dirname "$QUANT_FILE"))
+        echo "Processing $SAMPLE_NAME"
         awk -v OFS='\t' -v sample="$SAMPLE_NAME" '
         NR>1 {
             count[NR] = $5
@@ -250,12 +313,13 @@ extract_cpm() {
             for (i in count) {
                 print (count[i] / sum) * 1e6
             }
-        }' "${SAMPLE_DIR}/quant.sf" | \
+        }' "$QUANT_FILE" | \
         paste "$CPM_MATRIX" - > "${CPM_MATRIX}.tmp" && mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(ls "${QUANT_PREFIX}" | tr '\n' '\t' | sed 's/\t$//')" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
+    SAMPLE_NAMES=$(for f in "${QUANT_FILES[@]}"; do basename $(dirname "$f"); done | tr '\n' '\t' | sed 's/\t$//')
+    (echo -e "gene_id\t$SAMPLE_NAMES" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
     mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
     
     echo "CPM matrix created: $CPM_MATRIX"
