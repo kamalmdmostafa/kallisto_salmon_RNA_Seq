@@ -4,16 +4,20 @@ set -e
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>] [-p <read pair pattern>]"
+    echo "Usage: $0 -cds <CDS file> -k <k-mer number> -threads <number of threads> [-o <output directory>] [-r <read file directory>] [-b <bootstrap samples>]"
     echo "  -cds      : Path to the CDS FASTA file"
     echo "  -k        : K-mer size for indexing"
     echo "  -threads  : Number of threads to use"
     echo "  -o        : Output directory (optional, default: './kallisto')"
-    echo "  -p        : Read pair pattern (optional, default: '*_R{1,2}*.fastq.gz')"
+    echo "  -r        : Directory containing read files (optional, default: current directory)"
+    echo "  -b        : Number of bootstrap samples (optional, default: 100)"
     exit 1
 }
 
 # Parse command-line arguments
+OUTPUT_DIR="./kallisto"
+READ_DIR="."
+BOOTSTRAP_SAMPLES=100
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
@@ -33,8 +37,12 @@ while [[ $# -gt 0 ]]; do
         OUTPUT_DIR="$2"
         shift 2
         ;;
-        -p)
-        READ_PATTERN="$2"
+        -r)
+        READ_DIR="$2"
+        shift 2
+        ;;
+        -b)
+        BOOTSTRAP_SAMPLES="$2"
         shift 2
         ;;
         *)
@@ -50,14 +58,10 @@ if [ -z "$CDS_FILE" ] || [ -z "$K_VALUE" ] || [ -z "$THREADS" ]; then
     usage
 fi
 
-# Set default output directory if not specified
-if [ -z "$OUTPUT_DIR" ]; then
-    OUTPUT_DIR="./kallisto"
-fi
-
-# Set default read pair pattern if not specified
-if [ -z "$READ_PATTERN" ]; then
-    READ_PATTERN="*_R{1,2}*.fastq.gz"
+# Check if read directory exists
+if [ ! -d "$READ_DIR" ]; then
+    echo "Error: Read directory '$READ_DIR' does not exist"
+    exit 1
 fi
 
 # Set up directory structure
@@ -73,20 +77,6 @@ QC_REPORT="${KALLISTO_DIR}/qc_report.txt"
 # Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
-}
-
-# Function to determine the number of threads to use
-get_thread_count() {
-    local total_threads=$(nproc)
-    local available_threads=$((total_threads - 2))  # Leave 2 threads for system processes
-    
-    if [ $available_threads -lt 1 ]; then
-        echo 1
-    elif [ $available_threads -gt "$THREADS" ]; then
-        echo "$THREADS"
-    else
-        echo $available_threads
-    fi
 }
 
 # Check for required commands
@@ -126,10 +116,15 @@ echo "Cleaned CDS file created: $CLEANED_CDS"
 
 # Step 2: Build Kallisto index
 echo "Building Kallisto index..."
-INDEX_THREADS=$(get_thread_count)
-echo "Using $INDEX_THREADS threads for indexing"
+echo "Using k-mer size: $K_VALUE"
 
-kallisto index -i "$INDEX_PREFIX" -k "$K_VALUE" --threads="$INDEX_THREADS" "$CLEANED_CDS"
+echo "Command: kallisto index -i $INDEX_PREFIX -k $K_VALUE $CLEANED_CDS"
+kallisto index -i "$INDEX_PREFIX" -k "$K_VALUE" "$CLEANED_CDS"
+
+if [ $? -ne 0 ]; then
+    echo "Error: Kallisto index creation failed with exit code $?"
+    exit 1
+fi
 
 if [ -f "$INDEX_PREFIX" ]; then
     echo "Index created successfully: $INDEX_PREFIX"
@@ -142,31 +137,38 @@ fi
 echo "Starting quantification..."
 mkdir -p "$QUANT_PREFIX"
 
-# Find all unique sample prefixes
-SAMPLE_PREFIXES=$(ls $READ_PATTERN | sed -E 's/(.*)_R?[12].*/\1/' | sort -u)
-
-for SAMPLE_PREFIX in $SAMPLE_PREFIXES
-do
-    # Find corresponding R1 and R2 files
-    R1_FILE=$(ls ${SAMPLE_PREFIX}*R1*.fastq.gz 2>/dev/null | head -n 1)
-    R2_FILE=$(ls ${SAMPLE_PREFIX}*R2*.fastq.gz 2>/dev/null | head -n 1)
+# Function to find paired read files
+find_paired_reads() {
+    local r1_files=($(find "$READ_DIR" -maxdepth 1 -name "*R1*.fastq.gz" -o -name "*_1.fastq.gz"))
+    local r2_files=($(find "$READ_DIR" -maxdepth 1 -name "*R2*.fastq.gz" -o -name "*_2.fastq.gz"))
     
-    # If R1 and R2 files are not found, try alternative naming conventions
-    if [ -z "$R1_FILE" ] || [ -z "$R2_FILE" ]; then
-        R1_FILE=$(ls ${SAMPLE_PREFIX}*1.fastq.gz 2>/dev/null | head -n 1)
-        R2_FILE=$(ls ${SAMPLE_PREFIX}*2.fastq.gz 2>/dev/null | head -n 1)
+    if [ ${#r1_files[@]} -eq 0 ] || [ ${#r2_files[@]} -eq 0 ]; then
+        echo "Error: No paired read files found in the directory: $READ_DIR" >&2
+        return 1
     fi
     
-    # Check if both R1 and R2 files exist
-    if [ -z "$R1_FILE" ] || [ -z "$R2_FILE" ]; then
-        echo "Error: Missing paired-end file for $SAMPLE_PREFIX"
+    for r1_file in "${r1_files[@]}"; do
+        local r2_file="${r1_file/R1/R2}"
+        r2_file="${r2_file/_1/_2}"
+        
+        if [ -f "$r2_file" ]; then
+            echo "$r1_file $r2_file"
+        else
+            echo "Warning: No matching R2 file found for $r1_file" >&2
+        fi
+    done
+}
+
+# Process each pair of read files
+while read -r r1_file r2_file; do
+    if [ -z "$r1_file" ] || [ -z "$r2_file" ]; then
         continue
     fi
     
-    SAMPLE_NAME=$(basename "$SAMPLE_PREFIX")
+    SAMPLE_NAME=$(basename "$r1_file" | sed -E 's/_R1.*//;s/_1\.fastq\.gz//')
     echo "Processing sample: $SAMPLE_NAME"
-    echo "R1 file: $R1_FILE"
-    echo "R2 file: $R2_FILE"
+    echo "R1 file: $r1_file"
+    echo "R2 file: $r2_file"
     
     # Retry mechanism
     MAX_RETRIES=3
@@ -176,8 +178,9 @@ do
         kallisto quant -i "$INDEX_PREFIX" \
                        -o "${QUANT_PREFIX}/${SAMPLE_NAME}" \
                        -t "$THREADS" \
-                       --bootstrap-samples=100 \
-                       "$R1_FILE" "$R2_FILE" 2>&1 | tee "${QUANT_PREFIX}/${SAMPLE_NAME}_kallisto.log"
+                       --bootstrap-samples="$BOOTSTRAP_SAMPLES" \
+                       --plaintext \
+                       "$r1_file" "$r2_file" 2>&1 | tee "${QUANT_PREFIX}/${SAMPLE_NAME}_kallisto.log"
         
         if [ ${PIPESTATUS[0]} -eq 0 ]; then
             echo "Quantification successful for $SAMPLE_NAME"
@@ -193,7 +196,7 @@ do
             fi
         fi
     done
-done
+done < <(find_paired_reads)
 
 # Check if any samples were processed
 if [ -z "$(ls -A "$QUANT_PREFIX")" ]; then
@@ -251,20 +254,21 @@ extract_tpm() {
     echo "Extracting TPM values..."
     TPM_MATRIX="${KALLISTO_DIR}/kallisto_tpm_matrix.tsv"
     
-    # Find the first abundance.tsv file to get gene names
-    FIRST_ABUNDANCE=$(find "$QUANT_PREFIX" -name "abundance.tsv" | head -n 1)
-    if [ -z "$FIRST_ABUNDANCE" ]; then
+    # Find all abundance.tsv files
+    ABUNDANCE_FILES=($(find "$QUANT_PREFIX" -name "abundance.tsv"))
+    
+    if [ ${#ABUNDANCE_FILES[@]} -eq 0 ]; then
         echo "Error: No abundance.tsv files found in $QUANT_PREFIX"
         return 1
     fi
     
     # Create header with gene names
-    awk 'NR>1 {print $1}' "$FIRST_ABUNDANCE" > "$TPM_MATRIX"
+    awk 'NR>1 {print $1}' "${ABUNDANCE_FILES[0]}" > "$TPM_MATRIX"
     
     # Extract and append TPM values for each sample
-    find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | while read SAMPLE_DIR; do
-        SAMPLE_NAME=$(basename "$SAMPLE_DIR")
-        ABUNDANCE_FILE="$SAMPLE_DIR/abundance.tsv"
+    for ABUNDANCE_FILE in "${ABUNDANCE_FILES[@]}"; do
+        SAMPLE_NAME=$(basename $(dirname "$ABUNDANCE_FILE"))
+        echo "Processing $SAMPLE_NAME"
         if [ -f "$ABUNDANCE_FILE" ]; then
             awk -v OFS='\t' -v sample="$SAMPLE_NAME" 'NR>1 {print $5}' "$ABUNDANCE_FILE" | \
             paste "$TPM_MATRIX" - > "${TPM_MATRIX}.tmp" && mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
@@ -274,7 +278,8 @@ extract_tpm() {
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | xargs -n 1 basename | tr '\n' '\t' | sed 's/\t$//')" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
+    SAMPLE_NAMES=$(for f in "${ABUNDANCE_FILES[@]}"; do basename $(dirname "$f"); done | tr '\n' '\t' | sed 's/\t$//')
+    (echo -e "gene_id\t$SAMPLE_NAMES" && cat "$TPM_MATRIX") > "${TPM_MATRIX}.tmp" && \
     mv "${TPM_MATRIX}.tmp" "$TPM_MATRIX"
     
     echo "TPM matrix created: $TPM_MATRIX"
@@ -285,20 +290,21 @@ extract_cpm() {
     echo "Extracting and calculating CPM values..."
     CPM_MATRIX="${KALLISTO_DIR}/kallisto_cpm_matrix.tsv"
     
-    # Find the first abundance.tsv file to get gene names
-    FIRST_ABUNDANCE=$(find "$QUANT_PREFIX" -name "abundance.tsv" | head -n 1)
-    if [ -z "$FIRST_ABUNDANCE" ]; then
+    # Find all abundance.tsv files
+    ABUNDANCE_FILES=($(find "$QUANT_PREFIX" -name "abundance.tsv"))
+    
+    if [ ${#ABUNDANCE_FILES[@]} -eq 0 ]; then
         echo "Error: No abundance.tsv files found in $QUANT_PREFIX"
         return 1
     fi
     
     # Create header with gene names
-    awk 'NR>1 {print $1}' "$FIRST_ABUNDANCE" > "$CPM_MATRIX"
+    awk 'NR>1 {print $1}' "${ABUNDANCE_FILES[0]}" > "$CPM_MATRIX"
     
     # Extract est_counts, calculate CPM, and append for each sample
-    find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | while read SAMPLE_DIR; do
-        SAMPLE_NAME=$(basename "$SAMPLE_DIR")
-        ABUNDANCE_FILE="$SAMPLE_DIR/abundance.tsv"
+    for ABUNDANCE_FILE in "${ABUNDANCE_FILES[@]}"; do
+        SAMPLE_NAME=$(basename $(dirname "$ABUNDANCE_FILE"))
+        echo "Processing $SAMPLE_NAME"
         if [ -f "$ABUNDANCE_FILE" ]; then
             awk -v OFS='\t' -v sample="$SAMPLE_NAME" '
             NR>1 {
@@ -317,7 +323,8 @@ extract_cpm() {
     done
     
     # Add header with sample names
-    (echo -e "gene_id\t$(find "$QUANT_PREFIX" -type d -mindepth 1 -maxdepth 1 | xargs -n 1 basename | tr '\n' '\t' | sed 's/\t$//')" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
+    SAMPLE_NAMES=$(for f in "${ABUNDANCE_FILES[@]}"; do basename $(dirname "$f"); done | tr '\n' '\t' | sed 's/\t$//')
+    (echo -e "gene_id\t$SAMPLE_NAMES" && cat "$CPM_MATRIX") > "${CPM_MATRIX}.tmp" && \
     mv "${CPM_MATRIX}.tmp" "$CPM_MATRIX"
     
     echo "CPM matrix created: $CPM_MATRIX"
