@@ -165,7 +165,7 @@ fi
 echo "Starting quantification..."
 mkdir -p "$QUANT_PREFIX"
 
-# Function to find paired read files
+# FIXED Function to find paired read files
 find_paired_reads() {
     local r1_files=($(find "$READ_DIR" -maxdepth 1 -name "*R1*.fastq.gz" -o -name "*_1.fastq.gz"))
     local r2_files=($(find "$READ_DIR" -maxdepth 1 -name "*R2*.fastq.gz" -o -name "*_2.fastq.gz"))
@@ -176,13 +176,24 @@ find_paired_reads() {
     fi
     
     for r1_file in "${r1_files[@]}"; do
-        local r2_file="${r1_file/R1/R2}"
-        r2_file="${r2_file/_1/_2}"
+        local r2_file=""
+        
+        # Check which naming convention is used and apply appropriate substitution
+        if [[ "$r1_file" == *"R1"* ]]; then
+            # Uses R1/R2 naming convention
+            r2_file="${r1_file/R1/R2}"
+        elif [[ "$r1_file" == *"_1.fastq"* ]]; then
+            # Uses _1/_2 naming convention
+            r2_file="${r1_file/_1.fastq/_2.fastq}"
+        else
+            echo "Warning: Cannot determine naming convention for $r1_file" >&2
+            continue
+        fi
         
         if [ -f "$r2_file" ]; then
             echo "$r1_file $r2_file"
         else
-            echo "Warning: No matching R2 file found for $r1_file" >&2
+            echo "Warning: No matching R2 file found for $r1_file (expected: $r2_file)" >&2
         fi
     done
 }
